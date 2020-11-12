@@ -1,0 +1,2674 @@
+;extensions [matlab]
+
+;creating different types of cells
+
+breed [ECs EC]
+breed [ACs AC]
+breed [Plaques Plaque]
+breed [FCs FC]
+breed [monocytes monocyte]
+breed [neutrophils neutrophil]
+breed [lymphocytes lymphocyte]
+breed [macro1s macro1]
+breed [macro2s macro2]
+
+;defining own properties
+
+patches-own [dist_patch islumen? isartery? tnf tnf_out il1 il1_out il10 il10_out cytokine volume inPlaque? ldl ldl_out hdl_out tgrl_out ox-ldl WSS_int velocity resides_leuko? VCAM ICAM ES tgrl hdl pRandom]
+monocytes-own [in_plaque? tnf_gen il1_gen il10_gen T T_count pRand pTEM ]
+neutrophils-own [in_plaque? tnf_gen il1_gen il10_gen T T_count pRand pTEM ]
+lymphocytes-own [in_plaque? tnf_gen il1_gen il10_gen T T_count pRand pTEM ]
+macro1s-own [T_count T consume_ox-ldl_count consume]
+macro2s-own [T_count T]
+ECs-own [reside_ec? new_ECs?]
+
+;defining global variables
+
+globals [cx cy colEC colSMC colFB
+  Unitfactor patch_volume LumenRad InnerRad LumenArea threshold_vicinity threshold_vicinity_mm dist_min_EC dist_min_plaque volume_thresh v_cell
+  plaque-radius plaque_size plaque_shape plaque_col plaque-theta plaque-distance ox oy oz
+  density_leukocytes_perum3 number_leukocytes neutrophils_perunit monocytes_perunit lymphocytes_perunit
+  full_neutrophils_perunit fraction_neutrophils_perunit full_monocytes_perunit fraction_monocytes_perunit fraction_lymphocytes_perunit full_lymphocytes_perunit rand_leuko ldl_total hdl_total tgrl_total
+  neutro_col mono_col lympho_col
+  plaque_lumen_ratio plaque_too_big? growing_inside? prob_atherosclerosis severity WSShealthy plaqueArea
+  rad_leuko volume_leuko plaque_max_count volume_patch
+  pStiff_neutro pStiff_mono pStiff_lympho pTEM_neutro pTEM_mono pTEM_lympho
+  pIL1_indv pTNFalpha_indv_mono pTNFalpha_indv_neutro pIL1_indv_neutro pIL1_indv_mono pTNFalpha_indv_lympho pIL1_indv_lympho pIL1_lympho pIL1_neutro pIL1_mono plymphocyte pmonocyte pneutrophil  pTNFalpha_indv pTNFalpha_neutro pTNFalpha_mono pTNFalpha_lympho
+  TNF-alpha IL-1 IL-10 pVCAM pICAM pES pICAM_neutro pES_neutro pVCAM_indv pICAM_indv pES_indv pICAM_indv_neutro pES_indv_neutro pAdhesion_neutro pAdhesion_mono pAdhesion_lympho leukocyte_tm tm_ratio leukocyte_count
+  TdeltaSim Trecycle TobsWSS_neutro TobsIL1_neutro TobsTNF_neutro TobsWSS_mono TobsIL1_mono TobsTNF_mono TobsWSS_lympho TobsIL1_lympho TobsTNF_lympho
+  CFD_fraction CFD_frequency LumenVolumeNow LumenVolume LumenVolumeCFD LumenAreaNow findWSSfromCFD? matlabReady? matlabReturnVal
+  keep_moving? xcor_next ycor_next zcor_next cytokine_max
+  TNF-alpha-basal  IL-1-basal IL-10-basal tnf_perneut tnf_permono tnf_perlympho il1_perneut il1_permono il1_perlympho il10_perneut il10_permono il10_perlympho tnf_tmp il1_tmp il10_tmp tnf_perm1 il1_perm1 il10_perm1
+  n c Tm Tn Tl Tm1 Tm2 Tmf Vn Vl Vm Vm1 Vm2 Vf Cn Cl Cm Cm1 consume_ox-ldl count_ECs count_neigh x_final y_final z_final xcor_jump ycor_jump zcor_jump leuko intima_active? Tadhesion_mnc Tadhesion_neutro data_out_period plaqueAreaNow dist_cytokine
+  plaqueCount AM-basal tnf_old il1_old var_1 var_2 var_3 V1 I1 ES1 wall_vicinity domain_volume FudgeFactor mono_tem? lympho_tem? neutro_tem? mono_tem_patch? lympho_tem_patch? neutro_tem_patch?]
+
+to setup
+  clear-all
+  reset-ticks
+
+; Parameters for artery and plaque
+
+  set cx 0
+  set cy 0
+  set colEC green
+  set colSMC white                                                                                                                          ; color of EC, SMC, FB
+  set colFB white
+
+  set Unitfactor 100                                                                                                                        ; one patch = (100 x 100 x100) um^3
+  set LumenRad 1800
+  set InnerRad LumenRad / Unitfactor
+  set patch_volume (Unitfactor) ^ 3                                                                                                         ; inner radis equivalent to  18 patch
+  set threshold_vicinity 1.42
+  set wall_vicinity 10                                                                                                                      ; 10um above wall is considered
+
+  set plaque-radius 100 / Unitfactor                                                                                                        ; initial plaque radius 100 um
+  set plaque_size 0.3
+  set plaque_shape "circle"                                                                                                                 ;  properties of plaque
+  set plaque_col red
+
+  set plaque-theta 180
+  set plaque-distance 1.2 * InnerRad
+  set ox (plaque-distance) * cos(plaque-theta)                                                                                              ; center of plaque (-1.2R,0,0)
+  set oy (plaque-distance) * sin(plaque-theta)
+  set oz 0
+
+; Parameters for time scaling
+                                                                                                                 ; Masinovosky
+  set TdeltaSim 3600
+  set Trecycle 600
+;  set Tadhesion_neutro 600
+;  set Tadhesion_mnc 600   ; instantaneous as we have considered before time due to recycling of AMs
+
+; Life time for leukocytes in the artery wall
+
+  set Tm 7 * 24 * 3600 / TdeltaSim                                                                                                          ; monocytes
+  set Tn 2 * 24 * 3600 / TdeltaSim                                                                                                          ; neutrophil
+  set Tl 7 * 24 * 3600 / TdeltaSim                                                                                                          ; lymphocytes
+  set Tm1 100 * 24 * 3600 / TdeltaSim                                                                                                       ; macrophages
+  set Tm2 Tm1
+  ;set Tmf 48 * 3600 / TdeltaSim                                                                                                            ; macrophage to foam cell (Dubland, J.A.)
+  set consume_ox-ldl 1.78
+
+; Parameters for leukocytes concentration and adhesion
+
+  let velo 2000                                                                                                                         ; velocity near wall ~ 2000um/s
+;  set volume_blood velocity * wall_vicinity * Unitfactor
+;  let neutrophils_perunit fraction_neutrophil * density_leukocytes_perum3 * TdeltaSim * volume_blood
+;  let monocytes_perunit fraction_monocyte * density_leukocytes_perum3 * TdeltaSim * volume_blood                                            ;neutro..,mono.., lympho per patch
+;  let lymphocytes_perunit fraction_lymphocyte * density_leukocytes_perum3 * TdeltaSim * volume_blood
+;  set full_neutrophils_perunit floor neutrophils_perunit
+;  set fraction_neutrophils_perunit neutrophils_perunit - full_neutrophils_perunit                                                           ; number of cells per patch
+;  set full_monocytes_perunit floor monocytes_perunit
+;  set fraction_monocytes_perunit monocytes_perunit
+;  set full_lymphocytes_perunit floor lymphocytes_perunit
+;  set fraction_lymphocytes_perunit lymphocytes_perunit - full_lymphocytes_perunit
+
+  let t_cross Unitfactor / velo                                                                                                        ; time to cross the patch
+
+  set density_leukocytes_perum3 7e-6                                                                                                     ; Leukocyte concentratio is 10 times higher
+  set domain_volume wall_vicinity * ( Unitfactor ^ 2 )                                                                                            ; normal leukocyte concentration 7e9/litre
+  set number_leukocytes  density_leukocytes_perum3 * domain_volume                                                                                ; Considering leukocytes within 10 um from ec
+
+  let fraction_neutrophil_blood 0.62
+  let fraction_monocyte_blood 0.053                                                                                                               ; fraction of neutrophil,mono.........
+  let fraction_lymphocyte_blood 0.3
+  let fraction_interestedCells_blood (fraction_neutrophil_blood + fraction_lymphocyte_blood + fraction_monocyte_blood)                  ; we are excluding other leukocytes, so only 97.3% is of interested cells
+
+  let fraction_neutrophil fraction_neutrophil_blood / fraction_interestedCells_blood
+  let fraction_monocyte fraction_monocyte_blood / fraction_interestedCells_blood
+  let fraction_lymphocyte fraction_lymphocyte_blood / fraction_interestedCells_blood
+
+  let Nm 85                                                                                                                  ; Maximum number of cells that cover the patch
+  let t_fill (t_cross / number_leukocytes) * Nm                                                                               ; time to fill one patch with cells
+  ;show t_fill
+
+  ;; total cells in the patch 85 (dependent on patch size) and the fraction of neutro, mono and lympho are 0.64, 0.31 and 0.05 resp.
+  set neutrophils_perunit (fraction_neutrophil * Nm * Tdeltasim) / (abs(Trecycle - t_fill) / 2 + t_fill / 2 + Trecycle / 2)
+  set monocytes_perunit (fraction_monocyte * Nm * Tdeltasim) / (abs(Trecycle - t_fill) / 2 + t_fill / 2 + Trecycle / 2)                                                                             ;neutro..,mono.., lympho per patch
+  set lymphocytes_perunit (fraction_lymphocyte * Nm * Tdeltasim) / (abs(Trecycle - t_fill) / 2 + t_fill / 2 + Trecycle / 2)
+;  set neutrophils_perunit (54.4 * Tdeltasim) / (abs(Trecycle - 7.1) / 2 + 7.1 / 2 + Trecycle / 2)                                      ; See Adhesion_ABM document for details
+;  set monocytes_perunit (4.25 * Tdeltasim) / (abs(Tadhesion_mnc - 7.1) / 2 + 7.1 / 2 + Tadhesion_mnc / 2)                                                                              ;neutro..,mono.., lympho per patch
+;  set lymphocytes_perunit (26.35 * Tdeltasim) / (abs(Tadhesion_mnc - 7.1) / 2 + 7.1 / 2 + Tadhesion_mnc / 2)
+
+  set full_neutrophils_perunit floor neutrophils_perunit
+  set fraction_neutrophils_perunit neutrophils_perunit - full_neutrophils_perunit                                                           ; number of cells per patch
+  set full_monocytes_perunit floor monocytes_perunit
+  set fraction_monocytes_perunit monocytes_perunit
+  set full_lymphocytes_perunit floor lymphocytes_perunit
+  set fraction_lymphocytes_perunit lymphocytes_perunit - full_lymphocytes_perunit
+
+  set neutro_col cyan
+  set mono_col blue                                                                                                                         ; color of leukocytes
+  set lympho_col magenta
+
+  set Vn 524          ; Neutrophil diameter 10um
+  set Vl Vn           ; lymphocyte
+  set Vm 7238         ; monocyte  diameter 24um                                                                                                          ; volume of cells
+  set Vm1 Vm          ; macrophages
+  set Vm2 Vm
+  set Vf 8181      ; foam cell diameter 25um
+  set v_cell Vn
+
+; Available space for cell
+
+  let cell_fixed_ratio 0.4                                                                                                                  ; non fixed space (40% )
+  set volume_thresh (cell_fixed_ratio * patch_volume) - 3 * Vn                                                                              ; Assuming ~ all will transmigrate from one patch
+
+; Glagov remodeling
+
+  set plaque_lumen_ratio 0.4
+  set plaque_too_big? false                                                                                                                 ; Remodelling properties
+  set prob_atherosclerosis 0.654
+
+  set  WSShealthy 1.4
+  set data_out_period 10
+
+
+; ---Compute only once ---------- Implement Migration vs. Stiffness
+
+  ifelse ( Stiffness < 5 )
+  [ set pStiff_neutro 0.01 * ( 9.1753 * Stiffness + 46.9575 ) ]                              ; Neutrophil --------Ref: Stroka
+  [ set pStiff_neutro 0.91 ]
+  ;show ( word "Migration probability vs. stiffness for Neutrophil: " pStiff_neutro )
+
+  ifelse ( Stiffness < 5 )
+  [ set pStiff_mono 0.01 * ( 0.78 * Stiffness ^ 2 + 4.8 * Stiffness + 51.06 ) ]              ; Monocyte ----------Ref: Hayenga
+  [ set pStiff_mono 0.95 ]
+  ;show ( word "Migration probability vs. stiffness for monocyte: " pStiff_mono )
+
+   ifelse ( Stiffness < 5 )
+  [ set pStiff_lympho 0.01 * ( 0.78 * Stiffness ^ 2 + 4.8 * Stiffness + 51.06 ) ]            ; lymphocyte ----------Ref: Hayenga
+  [ set pStiff_lympho 0.95 ]
+  ;show ( word "Migration probability vs. stiffness for lymphocyte: " pStiff_lympho )
+
+; Initialize Cytokine values
+
+  set TNF-alpha-basal 0
+  set IL-1-basal 0
+  set IL-10-basal 0
+
+; Initialize Adhesion molecule values
+
+  ask patches with [(count ECs-here) > 0]
+  [ set AM-basal 1
+    set VCAM AM-basal
+    set ICAM AM-basal
+    set ES AM-basal
+    set tgrl 0]
+
+; Cytokine production (ng)
+
+  set tnf_perneut 2.2e-8 / (patch_volume * 10 ^ (-12))                                                                   ; Hatanaka   ; ng/patch to ng/ml
+  set tnf_permono 3.7e-6 / (patch_volume * 10 ^ (-12))                                                                   ; Hatanaka
+  set tnf_perlympho 0
+
+  set il1_perneut 0.22e-8 / (patch_volume * 10 ^ (-12))                                                                   ; Hatanaka
+  set il1_permono 0.3e-6 / (patch_volume * 10 ^ (-12))                                                                    ; Hatanaka
+  set il1_perlympho 0
+
+  set il10_perneut 0
+  set il10_permono 0
+  set il10_perlympho 0.16e-6 / (patch_volume * 10 ^ (-12))                                                                ; Rafiq
+
+  set tnf_perm1 tnf_permono
+  set il1_perm1 il1_permono * 7                                                                                           ; Basson
+  set il10_perm1 0
+
+;   set tnf_perneut 5e-6                                                                    ; Hatanaka
+;  set tnf_permono 6.7e-4                                                                    ; Hatanaka
+;  set tnf_perlympho 0
+;
+;  set il1_perneut 5e-7                                                                   ; Hatanaka
+;  set il1_permono 5e-5                                                                    ; Hatanaka
+;  set il1_perlympho 0
+;
+;  set il10_perneut 0
+;  set il10_permono 0
+;  set il10_perlympho 3.7e-5                                                               ; Rafiq
+;
+;  set tnf_perm1 tnf_permono
+;  set il1_perm1 il1_permono
+;  set il10_perm1 0
+
+
+; Set initial condition
+
+  ask patches [
+    set volume 0
+    set tnf TNF-alpha-basal
+    set il1 IL-1-basal
+    set il10 IL-10-basal]
+
+; Create artery, initial plaque  and leukocytes in lumen
+
+  ask patches [create-artery]
+
+  ask patches with [pxcor < 0 and isartery? = true] [produce-plaque-seed]                            ; for making small plaque to save computational time
+  ;ask patches with [pxcor < 0] [produce-plaque-seed]                                                ; for any sizes of plaques
+  ask patches [produce-intima]
+
+
+; Creating leukocyte and cholesterol in lumen
+
+  ask patches with [(count ECs-on neighbors) > 0 and islumen? = true]
+   [ask min-one-of patches with [inPlaque? = true] [ distance myself ]                              ; Find nearest plaque cell
+   ;[ask patch -21 0 0                                                                              ; for no plaque at the begining
+     [ set dist_min_plaque distance myself ]                                                        ; Find distance of the nearest plaque cell
+       if ( dist_min_plaque < 4 * threshold_vicinity )                                              ; Checking if the plaque is close enough
+        [
+         create-leukocyte-in-lumen
+         set resides_leuko? true
+;         set ldl LDL_conc * 10 ^ (-9)
+;         set ldl_total 0
+;         set hdl HDL_conc * 10 ^ (-9)
+;         set tgrl TGRL_conc * 10 ^ (-9)                                                             ; Setting lipoprotein in lumen, giving initial condition of concentration ( ng/ul) converted to (ng/um^3)
+         set ldl LDL_conc
+         set ldl_total 0
+         set hdl HDL_conc
+         set tgrl TGRL_conc / 10                                                                        ; do not need to change the concentration unit but tgrl rules are in mg/dl so have to change
+         ]
+        ]
+
+; Set initial condition
+
+  ask patches with [isartery? = true and inPlaque? = false]
+  [
+    set volume 0
+    set tnf TNF-alpha-basal
+    set il1 IL-1-basal
+    set il10 IL-10-basal]
+
+  ask patches with [any? ECs-here]
+   [set WSS_int WSShealthy]
+
+; set Lumen area
+  set LumenArea (count patches with [ (pzcor = 0) and (islumen? = true)])
+  ;show (word " Lumen area :" LumenArea)
+
+; set Lumen volume
+  set LumenVolume (count patches with [islumen? = true])
+  ;show (word " Lumen volume :" LumenVolume)
+
+; Parameters for CFD pause
+
+  set CFD_fraction 0.99
+  set CFD_frequency 80
+  get_lumen_volume
+  ;show (word "Lumen volume now:" LumenVolumeNow)
+  set LumenVolumeCFD ( LumenVolumeNow * CFD_fraction )
+  ;set LumenVolumeCFD ( LumenVolumeNow - CFD_frequency )
+  set findWSSfromCFD? false
+
+  set FudgeFactor 10
+  set mono_tem? false
+  set mono_tem_patch? false
+  set lympho_tem? false
+  set lympho_tem_patch? false
+  set neutro_tem? false
+  set neutro_tem_patch? false
+
+; save initial data
+
+  dataout_intima
+  dataout_plaque
+  dataout_AC
+
+end
+
+to create-artery
+
+  set islumen? false
+  set isartery? false
+  set dist_patch ( distancexyz cx cy pzcor )
+
+  if ( abs (pzcor) <= artery_length / 2 ) [
+    if (InnerRad < (round dist_patch) and (round dist_patch) <= InnerRad + num-layers-AC )
+    [sprout-ACs 1 [ set color white
+      set shape "circle"
+      set heading 0
+      set size 0.6 ]
+    set isartery? true]
+  ]
+
+end
+
+to produce-intima
+
+  ;show (word "islumen?:" islumen?)
+  set dist_patch (distancexyz cx cy pzcor )
+  set islumen? false
+  if (isartery? = false)
+  [
+  if ( abs (pzcor) <= artery_length / 2 ) [
+    if ( round ( dist_patch ) <= InnerRad )
+    [if not any? ACs-here and not any? neutrophils-here and not any? monocytes-here and not any? lymphocytes-here
+      [ifelse any? ACs-on neighbors with [(distance myself) = 1] or any? neutrophils-on neighbors with [(distance myself) = 1] or any? monocytes-on neighbors with [(distance myself) = 1] or any? lymphocytes-on neighbors with [(distance myself) = 1] or any? macro1s-on neighbors with [(distance myself) = 1] or any? macro2s-on neighbors with [(distance myself) = 1] or any? FCs-on neighbors with [(distance myself) = 1]
+       ;[ifelse any? ACs-on neighbors with [(distance myself) < 1.74]  or any? neutrophils-on neighbors with [(distance myself) < 1.74] or any? monocytes-on neighbors with [(distance myself) < 1.41] or any? lymphocytes-on neighbors with [(distance myself) < 1.41]
+        [sprout-ECs 1 [ set color colEC
+          set shape "circle"
+          set heading 0
+          set size 1
+          set reside_ec?  true
+          set new_ECs? true]
+        set isartery? true
+        set tnf_old 0
+        set il1_old 0
+        set WSS_int WSShealthy
+        ]
+        [set islumen? true
+        ]
+      ]
+    ]
+  ]
+  ]
+  ;show (word "islumen?:" islumen?)
+
+end
+
+to create-leukocyte-in-lumen
+
+          sprout-neutrophils full_neutrophils_perunit [set color neutro_col
+            set shape "triangle"
+            set size 0.3
+            set tnf_gen tnf_perneut
+            set il1_gen il1_perneut
+            set il10_gen il10_perneut
+            set in_plaque? false
+            set T Tn
+            set T_count 0
+            ]
+          set resides_leuko? true
+
+        set rand_leuko random-float 1
+
+        if ( rand_leuko < fraction_neutrophils_perunit )
+        [
+          sprout-neutrophils 1 [set color neutro_col
+            set shape "triangle"
+            set size 0.3
+            set tnf_gen tnf_perneut
+            set il1_gen il1_perneut
+            set il10_gen il10_perneut
+            set in_plaque? false
+            set T Tn
+            set T_count 0
+            ]
+        ]
+
+         sprout-monocytes full_monocytes_perunit [set color mono_col
+          set shape "square"
+          set size 0.3
+          set tnf_gen tnf_permono
+          set il1_gen il1_permono
+          set il10_gen il10_permono
+          set in_plaque? false
+          set T Tm
+          set T_count 0
+            ]
+          set resides_leuko? true
+
+          set rand_leuko random-float 1
+
+        if ( rand_leuko < fraction_monocytes_perunit )
+        [
+          sprout-monocytes 1 [set color mono_col
+          set shape "square"
+          set size 0.3
+          set tnf_gen tnf_permono
+          set il1_gen il1_permono
+          set il10_gen il10_permono
+          set in_plaque? false
+          set T Tm
+          set T_count 0
+        ]
+         set resides_leuko? true
+        ]
+      sprout-lymphocytes full_lymphocytes_perunit [set color lympho_col
+            set shape "circle"
+            set size 0.3
+            set tnf_gen tnf_perlympho
+            set il1_gen il1_perlympho
+            set il10_gen il10_perlympho
+            set in_plaque? false
+            set T Tl
+            set T_count 0
+            ]
+
+       set rand_leuko random-float 1
+
+        if ( rand_leuko < fraction_lymphocytes_perunit )
+        [
+          sprout-lymphocytes 1 [set color lympho_col
+            set shape "circle"
+            set size 0.3
+            set tnf_gen tnf_perlympho
+            set il1_gen il1_perlympho
+            set il10_gen il10_perlympho
+            set in_plaque? false
+            set T Tl
+            set T_count 0
+            ]
+           set resides_leuko? true
+      ]
+
+
+end
+
+
+to produce-plaque-seed
+
+  set dist_patch (distancexyz ox oy oz)
+  if ((round dist_patch) <= plaque-radius)                                                 ; Initial plaque
+  [
+    ;ask SMCs-here[die]
+    ask ECs-here[die]
+    sprout-neutrophils 1 [
+      set shape plaque_shape
+      set size plaque_size
+      set color plaque_col
+      set in_plaque?  true
+      set T Tn
+      set T_count 0
+      ]
+;    sprout-monocytes 1 [
+;      set shape plaque_shape
+;      set size plaque_size
+;      set color plaque_col
+;      set in_plaque?  true
+;      set T Tm
+;      set T_count 0
+;      ]
+;    sprout-macro1s 1 [
+;      set shape plaque_shape
+;      set size plaque_size
+;      set color plaque_col
+;      set T Tm1
+;      set T_count 0
+;      set consume consume_ox-ldl
+;      set consume_ox-ldl_count 0
+;      set ox-ldl 1e-1
+;      ]
+    set Cn count neutrophils-here
+    set Cl count lymphocytes-here
+    set Cm count monocytes-here
+    set Cm1 count macro1s-here
+
+    set tnf (( Cn * tnf_perneut ) + (Cl * tnf_perlympho) + (Cm * tnf_permono) + (Cm1 * tnf_perm1))
+    set il1 (( Cn * il1_perneut ) + (Cl * il1_perlympho) + (Cm * il1_permono) + (Cm1 * il1_perm1))
+    set il10 (( Cn * il10_perneut ) + (Cl * il10_perlympho) + (Cm * il10_permono) + (Cm1 * il10_perm1))
+    set inPlaque? true
+    set isartery? true
+  ]
+
+end
+
+
+to plaque-growth
+
+  print ticks
+  reset-timer
+
+  set leukocyte_count (count neutrophils with [in_plaque? = false] + count monocytes with [in_plaque? = false] + count lymphocytes with [in_plaque? = false])
+  set leukocyte_tm 0
+  set LumenVolume count patches with [islumen? = true]
+  get_lumen_volume
+  set LumenVolumeCFD ( LumenVolumeNow * CFD_fraction )
+
+;; save data
+
+if ( ( ( ticks ) mod data_out_period ) = 0)
+  [
+    show (word " saving data")
+    dataout_intima
+    dataout_plaque
+    dataout_AC
+    ]
+
+;; Save world
+
+if ((ticks mod 10) = 0)
+[
+  show (word " saving world")
+  export-world (word "LTEM_"ticks".csv")
+  ]
+
+
+;; LDL/HDL/ TGRL infiltration through wall
+
+ Cholesterol_infiltration
+
+;; Diffusion of cytokines and cholesterol
+
+ set n 0
+ while [n <= 2]
+  [
+   diffusion_cytokine
+   diffusion_cholesterol
+   set n n + 1
+  ]
+   ;show (word "diffusion is done")
+
+ask patches with [any? ECs-here and (tnf > 0 or il1 > 0) ]
+[get_AdhesionMolecule]
+
+;; Adhesion of leukocytes
+
+ask patches with [islumen? = true and ((count neutrophils-here) > 0 or (count monocytes-here) > 0 or (count lymphocytes-here) > 0)]
+[get_adhesion_probability]
+; show (word "finding adhesion probability is done")
+
+  set tm_ratio (leukocyte_tm / leukocyte_count)
+  ;show (word" leukocyte transmigration" leukocyte_tm)
+
+;; Update lifetime of cells in the wall and apoptosis
+
+  ask neutrophils with [in_plaque? = true]
+  [
+    set T_count T_count + 1
+    if (T_count > T)
+    [
+      ;show (word "life is over")
+      die
+      ]
+    ]
+  ask monocytes with [in_plaque? = true]
+   [
+    set T_count T_count + 1
+    ]
+  ask lymphocytes with [in_plaque? = true]
+   [
+    set T_count T_count + 1
+    if (T_count > T)
+    [
+      die
+      ]
+    ]
+; show (word "leukocyte lifetime is done")
+
+ ; Macrophages generation
+  produce-macrophage
+
+ ; Update lifetime of macrophage and FC formation
+;  ask macro1s
+;  [
+;    set T_count T_count + 1
+;    if (T_count > T)
+;  [
+;    ask patch-here
+;    [                                                                                                 ; Foam cell production (Dubland, J.A.)
+;      if ( ox-ldl > 260 )
+;      [                                                                                                               ; From Olivares et al.
+;      sprout-FCs 1[ set color red
+;      set shape "cloud"
+;      set size 0.7]
+;    set inPlaque? true
+;    ;set ox-ldl ox-ldl - 260
+;  ]
+;  ]
+;  die
+;  ]
+;  ]
+   ask macro1s
+  [
+    set consume_ox-ldl_count consume_ox-ldl_count + ( 0.042 * 10 ^ (-6) * 10 ^ (6) * (525.7812 - 525.803 * ( 1 - exp(- 5.9591 * ox-ldl ^ (-0.15484) ) )))
+    ;show consume_ox-ldl_count
+    set T_count T_count + 1
+    ifelse (consume_ox-ldl_count > consume_ox-ldl)
+    ;if (consume_ox-ldl_count > consume_ox-ldl and T_count > T)
+  [
+    ask patch-here[                                                                                                              ; From Olivares et al.
+      sprout-FCs 1[ set color red
+      set shape "cloud"
+      set size 0.7]
+    set inPlaque? true
+    ;set ox-ldl ox-ldl - 260
+  ]
+  die
+  ]
+    [
+      if (T_count > T)
+      [die]
+    ]
+  ]
+
+  ask macro2s [
+    set T_count T_count + 1
+      if (T_count > T)
+    [die]
+  ]
+
+
+;; Update patch volume, cytokines and ldl/ox-ldl
+
+ ask patches with [inPlaque? = true]
+ [
+   update_cellVolume
+   update_cytokine
+   update_ldl
+     ]
+; show (word "update ldl is done")
+
+;; Remove the remaining leukocytes from lumen
+
+  ask neutrophils with [in_plaque? = false] [die]
+  ask monocytes with [in_plaque? = false] [die]
+  ask lymphocytes with [in_plaque? = false] [die]
+
+;; Make intima disappear if plaque is large
+;show (word "growing inside:" growing_inside?)
+if (growing_inside? = true)[
+  ask ECs[
+    ask patch-here [
+      if not any? neutrophils-here and not any? monocytes-here and not any? lymphocytes-here and not any? macro1s-here and not any? macro2s-here and not any? FCs-here
+      [set isartery? false]
+      ]
+    die]
+  ]
+
+;; Reconstruct intima
+ if (growing_inside? = true)[
+   ask patches with [isartery? = false] [produce-intima]
+ ]
+
+; Populate lumen with leukocytes and ldl with appropriate density
+
+  ask patches  with [resides_leuko? = true and islumen? = true]
+  [
+    create-leukocyte-in-lumen
+     set ldl LDL_conc
+     set hdl HDL_conc
+     set tgrl TGRL_conc / 10
+     ]
+
+  set plaqueArea plaqueAreaNow
+
+  get_plaque_area
+
+  if ((ticks mod 5) = 0 and any? patches with [inPlaque? = true])
+  [ask patches  with [(count ECs-on neighbors) > 0 and islumen? = true and resides_leuko? != true and (count neighbors with [resides_leuko? = true] ) > 0]
+    [
+      ask min-one-of patches with [inPlaque? = true][distance myself]
+      [set dist_min_plaque distance myself]                                                           ; Find distance of the nearest plaque cell
+      if ( dist_min_plaque < 4 * threshold_vicinity )                                                 ; Checking if the plaque is close enough
+      [
+      create-leukocyte-in-lumen
+      set resides_leuko? true
+      set ldl LDL_conc
+      set hdl HDL_conc
+      set tgrl TGRL_conc / 10
+      ]
+  ]
+  ]
+
+;;; Random leukocyte generation in plaque
+;  if ((ticks mod 400) = 0 )                                                                    ; Probability 1 out of 10,000; (10000/28 =~ 400)
+;  [set mono_tem_patch? false]
+;
+;  if (mono_tem_patch? = false and mono_tem? = false)
+; [ ask one-of patches with [inPlaque? = true and volume < volume_thresh]
+;[
+;      let mono_tem_patch random-float 1
+;      ;show mono_tem_patch
+;      if (mono_tem_patch < 0.02)                                                                  ; select 0.04 to increase randomness, smaller the number, the higher is randomness. also the purpose is to generate 1 in 400 ticks, so it is possible
+;  [sprout-monocytes 1 [set color mono_col
+;          set shape "square"
+;          set size 0.3
+;          set in_plaque? true
+;          set T Tm
+;          set T_count 0
+;            ]
+;        set mono_tem_patch? true
+;      ]
+;  ]
+;  ]
+; ; show count monocytes with [in_plaque? = true]
+;
+;    if ((ticks mod 64) = 0 )                                                                       ; Probability 1 out of 10,000; (10000/157 =~ 64; lymphocytes in one patch = 157)
+;  [set lympho_tem_patch? false]
+;
+;  if (lympho_tem_patch? = false and lympho_tem? = false)
+; [ ask one-of patches with [inPlaque? = true and volume < volume_thresh]
+;[
+;      let lympho_tem_patch random-float 1
+;      ;show lympho_tem_patch
+;      if (lympho_tem_patch < 0.08)
+;  [sprout-lymphocytes 1 [set color lympho_col
+;          set shape "square"
+;          set size 0.3
+;          set in_plaque? true
+;          set T Tl
+;          set T_count 0
+;            ]
+;        set lympho_tem_patch? true
+;      ]
+;  ]
+;  ]
+; ; show count lymphocytes with [in_plaque? = true]
+;
+;    if ((ticks mod 3) = 0 )
+;  [set neutro_tem_patch? false]
+;
+;  if (neutro_tem_patch? = false and neutro_tem? = false)
+; [ ask one-of patches with [inPlaque? = true and volume < volume_thresh]
+;[
+;      let neutro_tem_patch random-float 1
+;      ;show neutro_tem_patch
+;      if (neutro_tem_patch < 0.3)
+;  [sprout-neutrophils 1 [set color neutro_col
+;          set shape "square"
+;          set size 0.3
+;          set in_plaque? true
+;          set T Tn
+;          set T_count 0
+;            ]
+;        set neutro_tem_patch? true
+;      ]
+;  ]
+;  ]
+;;  show count neutrophils with [in_plaque? = true]
+
+ tick
+
+;  set mono_tem? false
+;  set lympho_tem? false
+;  set neutro_tem? false
+
+
+;; Saving data
+
+;  dataout_intima
+;  dataout_plaque
+;  dataout_AC
+;  dataout_WSS
+;  dataout_leukocytes
+
+;; Providing conditions for stopping plaque growth
+;
+    set LumenVolume LumenVolumeNow
+
+    get_lumen_volume
+
+  ;show ( word "Lumen volume Now: " LumenVolumeNow)
+  ;show ( word "Lumen volume target: " LumenVolumeCFD )
+
+  if ( LumenVolumeNow <= LumenVolumeCFD ) [
+   ; set LumenVolumeCFD LumenVolumeCFD * CFD_fraction
+    set LumenVolumeCFD ( LumenVolumeNow - CFD_frequency )
+    ;show ( word "Lumen volume target: " LumenVolumeCFD )
+    ;show ( word "Update WSS data" )
+    set findWSSfromCFD? true
+    dataout_intima
+    ;dataout_WSSZone
+    stop]
+
+;show count patches with [inPlaque? = true]
+;show count patches with [any? neutrophils-here and islumen? = true]
+;show count neutrophils with [in_plaque? = true]
+;show count neutrophils with [in_plaque? = false]
+
+ set LumenAreaNow count patches with [islumen? = true and pzcor = 0]
+
+ set severity (LumenArea - LumenAreaNow) / LumenArea * 100
+ ;show (word " severity % :" severity)
+
+;; Condition to stop ABM
+
+;if (LumenAreaNow < LumenArea)
+;[stop]
+
+;if(ticks > 126)
+;[stop]
+show timer
+end
+
+to diffusion_cytokine
+
+; Parameters for Fick's law
+reset-timer
+  let time 1200
+  let D 0.30
+  let area  Unitfactor ^ 2
+  let coeff (- time * D / area)
+
+; Applying fick's law
+
+    ask patches with [isartery? = true and (count neighbors with [tnf > 0]) > 0]
+    [
+      set c count neighbors
+     ; show c
+     let b 0
+     let m 0
+     let p 0
+     ask neighbors [
+       set b b + tnf
+       set m m + il1
+       set p p + il10
+       ]
+     set tnf_out coeff * ( b - c * tnf)
+     set il1_out coeff * ( m - c * il1)
+     set il10_out coeff * ( p - c * il10)
+     set tnf tnf - tnf_out
+     set il1 il1 - il1_out
+     set il10 il10 - il10_out
+
+    ;show (word "tnf:" tnf)
+    if (tnf <= 0)                                                                                           ; to avoid problem in handling with zero values (tnf ^ (-ve value))
+    [ set tnf 1e-10
+      ;show (word "tnf to avoid zero:" tnf)
+      ]
+
+        if (il1 <= 0)                                                                                           ; to avoid problem in handling with zero values (tnf ^ (-ve value))
+    [ set il1 1e-10
+      ;show (word "tnf to avoid zero:" tnf)
+      ]
+
+    if (tnf > 100)
+    [set tnf 100]
+    if (il1 > 100)
+    [set il1 100]
+     set cytokine tnf + il1
+     ]
+
+end
+
+
+to diffusion_cholesterol
+
+ ;setting ldl parameters
+
+  let time 1200
+  let D 0.25
+  let area 10000
+  let coeff (- time * D / area)
+
+;applying fick's law
+
+  ask patches with [isartery? = true and (count neighbors with [ldl > 0]) > 0]
+    [
+      set c count neighbors
+    let b 0
+    let m 0
+    let p 0
+    ask neighbors [
+      set b b + ldl
+      set m m + hdl
+      set p p + tgrl
+      ]
+    set ldl_out coeff * ( b - c * ldl)
+    set hdl_out coeff * ( m - c * hdl)
+    set tgrl_out coeff * ( p - c * tgrl)
+    set ldl ldl - ldl_out
+    set hdl hdl - hdl_out
+    set tgrl tgrl - tgrl_out
+
+    ; LDL oxidation
+
+    if (ldl < 0)
+     [set ldl 0]
+     if (hdl < 0)                         ; to avoid getting non number
+     [set hdl 0]
+     set ox-ldl ox-ldl + 0.0075 * ldl
+
+     ;Removal of ox-ldl by HDL
+
+     if (ox-ldl < 0)
+     [set ox-ldl 0]
+     set ox-ldl ox-ldl - ox-ldl * 0.01 * (0.57233 + 91.8555 * ( 1 - exp(-2.7193e-05 * hdl ^ (1.5442) ) ))    ; Removal of LDL oxidation by HDL
+   ]
+
+end
+
+
+to get_AdhesionMolecule
+
+
+    ; Adhesion molecule as function of cytokine
+
+     if (tnf < 0)                                                                                             ; to avoid problem in handling with zero values (tnf ^ (-ve value))
+    [ set tnf 1e-10
+      ;show (word "tnf to avoid zero:" tnf)
+      ]
+    if (il1 < 0)                                                                                              ; same reason as above
+    [ set il1 1e-10
+      ]
+    if (tgrl < 0)                                                                                             ; to avoid problem with linear finciton (0.0007 * tgrl + 0.8912)
+    [ set tgrl 0
+      ]
+
+    let Vtnf (0.95382 + 1.949 * ( 1 - exp(-1.8784 * tnf ^ (0.52883) ) ))
+    ; let Vil (1.0346 + 4.1354 * ( 1 - exp(-0.32141 * il1 ^ (0.46301) ) ))                                     ; Fit 3
+    let Vil (1 + 2.7721 * ( 1 - exp(-4.3422 * il1 ^ (0.50229) ) ))                                             ; Fit 2
+
+    ifelse (WSS_int <= 0.2)
+    [
+      ifelse (Vtnf > Vil)
+      [
+        set V1 ((1.11) * Vtnf * (0.0007 * tgrl + 0.8912) * (5.5 * WSS_int + 1))
+        ;show (word "contribution of tnf on VCAM is higher" V1)
+        ]
+      [
+        set V1 ((1.11) * Vil * (0.0007 * tgrl + 0.8912) * (5.5 * WSS_int + 1))
+       ; show (word "contribution of il1 on VCAM is higher" V1)
+        ]
+    ]
+    [
+      ifelse(Vtnf > Vil)
+      [
+        ifelse (WSS_int < 0.3)
+        [
+    set V1  ((1.11) * Vtnf * (0.0007 * tgrl + 0.8912) * (-1.267 * WSS_int + 2.311))
+    ]
+        [
+          set V1  ((1.11) * Vtnf * (0.0007 * tgrl + 0.8912) * (-1.267 * 0.3 + 2.311))
+        ]
+      ]
+    [ifelse (WSS_int < 0.3)
+      [
+     set V1  ((1.11) * Vtnf * (0.0007 * tgrl + 0.8912) * (-1.267 * WSS_int + 2.311))
+      ]
+      [
+        set V1  ((1.11) * Vtnf * (0.0007 * tgrl + 0.8912) * (-1.267 * 0.3 + 2.311))
+      ]
+    ]
+    ]
+     ; show (word " VCAM-1 as function of cytokine:" V1)
+
+
+    let Itnf (8.1206 - 7.1722 * ( 1 - exp(-0.1354 * tnf ^ (-0.46956))))
+    ; let Iil (1.0154 + 2.6565 * ( 1 - exp(-0.13736 * il1 ^ (0.57266) ) ))                                ; Fit 3
+    let Iil 1 + 1.0556 * ( 1 - exp(-11.7189  * il1 ^ (0.79035) ) )                                        ; Fit 2
+
+    ifelse (Itnf > Iil)
+    [
+      ifelse (WSS_int < 1.4)
+      [
+      set I1 (0.86 * Itnf * 1.1 * ( 1.237 * WSS_int + 1.0267))
+     ; show (word "contribution of tnf on ICAM is higher" I1)
+    ]
+      [
+        set I1 (0.86 * Itnf * 1.1 * ( 1.237 * 1.2 + 1.0267))
+      ]
+    ]
+    [
+      ifelse (WSS_int < 1.4)
+      [
+      set I1 (0.86 * Iil * 1.1 * ( 1.237 * WSS_int + 1.0267))
+      ;show (word "contribution of il1 on ICAM is higher"I1)
+    ]
+      [
+        set I1 (0.86 * Iil * 1.1 * ( 1.237 * 1.2 + 1.0267))
+      ]
+    ]
+    ;show (word " ICAM-1 as function of cytokine:" I1)
+
+
+    let EStnf (0.79568 + 10.2102 * ( 1 - exp(-1.7516 * tnf ^ (0.59322) ) ))
+    let ESil 1 + 17.0783 * ( 1 - exp(-1.9560 * il1 ^ (0.2249) ) )
+
+    ifelse (WSS_int < 0.4)
+    [
+      ifelse(EStnf > ESil)
+      [
+    set ES1  (0.81 * EStnf * 1.1 * ( 1.6 * WSS_int + 1.0933))
+    ]
+    [
+     set ES1  (0.81 * ESil * 1.1 * ( 1.6 * WSS_int + 1.0933))
+    ]
+    ]
+    [
+      ifelse(EStnf > ESil)
+      [
+        ifelse (WSS_int < 0.9)
+        [
+    set ES1  (0.81 * EStnf * 1.1 * ( - 1.6703 * WSS_int + 2.3038))
+    ]
+        [
+          set ES1  (0.81 * EStnf * 1.1 * ( - 1.6703 * 0.9 + 2.3038))
+        ]
+      ]
+    [ifelse (WSS_int < 0.9)
+      [
+     set ES1  (0.81 * ESil * 1.1 * ( - 1.6703 * WSS_int + 2.3038))
+    ]
+      [
+        set ES1  (0.81 * ESil * 1.1 * ( - 1.6703 * 0.9 + 2.3038))
+      ]
+    ]
+    ]
+
+   ; show (word " ESelectin as function of cytokine:" ES1)
+
+     ;; Synergistic effect of tnf and il1b when tnf<=0.01 and il1b = 0.002
+  if (tnf <= 0.01 and il1 <= 0.002)
+  [
+    set V1 V1 * 1.4
+    set I1 I1 * 1.4]
+
+    ; Adhesion molecule as function of ox-LDL
+
+    ;ICAM = 0.9976 + 0.39608 ( 1 - exp(-0.018613 x ^ (1.0708) ) )
+    ;ox-LDL does not affect VCAM and ES or affects very small but has synergistic effect on VCAM
+    ;set V1 V1 * 1.45
+    set V1 V1 * (1 + 0.45 * ( 1 - exp(-0.5 * ox-ldl ^ (1) ) ))
+    ;show (word " ICAM-1 as function of cytokine:" I1)
+
+
+  ; Degradation of AM with time
+
+
+  if (I1 < 0)
+  [set I1 0
+   ; show (word "I1:" I1)
+    ]
+  if (V1 < 0)
+  [set V1 0
+    ;show (word "V1:" V1)
+   ]
+  if (ES1 < 0)
+  [set ES1 0
+   ; show (word "ES1:" ES1)
+   ]
+
+  ifelse (ICAM > I1)
+  [set ICAM ICAM
+  ]
+  [set ICAM I1
+  ]
+;  show VCAM
+;  show V1
+  ifelse (VCAM > V1)
+  [let a VCAM * 0.01 * (-0.0288 * (TdeltaSim / 3600) ^ 2 + 3.6275 * (TdeltaSim / 3600) - 12.387)
+    if(a >= 0)
+    [set VCAM (VCAM - a)]
+    ;show (word " VCAM before hdl:" VCAM)
+  ]
+  [set  VCAM V1
+  ]
+  ;show (word " VCAM before hdl:" VCAM)
+
+  ifelse (ES > ES1)
+  [let a ES * 0.01 * (-0.0288 * (TdeltaSim / 3600) ^ 2 + 3.6275 * (TdeltaSim / 3600) - 12.387)
+    if (a >= 0)
+    [set ES  (ES - a)]
+  ]
+  [set ES ES1
+  ]
+;  ifelse (tnf <= tnf_old or il1 <= il1_old)
+;  [
+;    let a VCAM * 0.01 * (-0.0288 * (TdeltaSim / 3600) ^ 2 + 3.6275 * (TdeltaSim / 3600) - 12.387)
+;    if(a >= 0)
+;    [set VCAM (VCAM - a)]
+;    ;show (word "no new VCAM")
+;  ]
+;  [set VCAM V1]
+;
+;  ifelse (tnf <= tnf_old or il1 <= il1_old)
+;  [
+;    set ES  (ES - ES * 0.01 * (-0.0288 * (TdeltaSim / 3600) ^ 2 + 3.6275 * (TdeltaSim / 3600) - 12.387))
+;    ;show (word "no new ES")
+;  ]
+;  [set ES ES1]
+;  show (word " ICAM before hdl:" ICAM)
+;  show (word " VCAM before hdl:" VCAM)
+;  show (word " ES before hdl:"ES)
+
+  ; Inhibition of AM by HDL
+
+  if (hdl < 1e-8)
+  [set hdl 1e-8]
+  ;show hdl
+  set VCAM VCAM * (1 - (-0.00086967 + 3.3756 * ( 1 - exp(-0.11958 * hdl ^ (0.12618) ) )))
+  set ICAM ICAM * (1 - (-5.0665e-19 + 0.6312 * ( 1 - exp(-0.0001918 * hdl ^ (1.4983) ) )))
+  ifelse (hdl <= 1000)
+  [
+    set ES ES * (1 - ( 0.0008 * hdl + 0.0571))
+  ]
+  [
+    set ES ES * (1 - ( 0.0008 * 1000 + 0.0571))
+  ]
+;  show (word " ICAM after hdl:"ICAM)
+;  show (word " VCAM after hdl:" VCAM)
+;  show (word " ES after hdl:"ES)
+
+  set tnf_old tnf
+  set il1_old il1
+;  show tgrl
+;  show (0.0007 * tgrl + 0.8912)
+
+end
+
+to get_adhesion_probability
+
+       set pVCAM 0
+       set pICAM 0
+       set pES 0
+       set pICAM_neutro 0
+       set pES_neutro 0
+
+   ;set leukocyte_count (count neutrophils with [in_plaque? = false] + count monocytes with [in_plaque? = false] + count lymphocytes with [in_plaque? = false])
+   set count_ECs count neighbors with [(count ECs-here) > 0 and ( 1.42 > (distance myself) )]
+   if (count_ECs > 0)
+   [
+   ask neighbors with [(count ECs-here) > 0 and ( 1.42 > (distance myself) ) ]
+   [
+      ;show (word " VCAM at closest neighbors:" VCAM)
+      ;show (word " ICAM at closest neighbors:" ICAM)
+
+      set threshold_vicinity_mm distance myself * 0.1                                                                               ; 1 Unit = 100 um = 0.1 mm
+      ;show (word " distance to EC:" threshold_vicinity_mm)
+      set TNF-alpha tnf
+      set IL-1 il1
+
+;; The following part is for small plaque when WSS is normal and hence no adhesion. We are considering that for a very small time of cardiac cycle the WSS is less than 0.4Pa
+
+;     ifelse (ES > 1)                                                                                              ; Without E selectin, no adhesion even with high ICAM/ VCAM
+;       [
+;
+;       ;ifelse (WSS_int >= WSShealthy)
+;       ifelse (WSS_int > 0.4)
+;       [ set pRandom random-float 1
+;         show (word "small wss" pRandom)
+;       if(pRandom < 0.03)
+;       [
+;         show (word " small wss:")
+;         ifelse (WSS_int <= 2)
+;       [set pVCAM_indv (0.085 * VCAM - 0.085) * 0.01 * (1.7404 * WSS_int ^ 2 - 6.0128 * WSS_int + 95.619)]
+;       [set pVCAM_indv (0.085 * VCAM - 0.085) * 0.01 * 90]
+;
+;       ifelse (WSS_int <= 2)
+;       [set pICAM_indv (0.081 * ICAM - 0.081) * 0.01 * (1.7404 * WSS_int ^ 2 - 6.0128 * WSS_int + 95.619)]
+;       [set pICAM_indv (0.081 * ICAM - 0.081) * 0.01 * 90]
+;
+;       ifelse (WSS_int <= 0.7)
+;       [set pES_indv (0.02 * ES - 0.02) * 0.01 * (82.247 * WSS_int ^ 2 - 103.84 * WSS_int + 38.329)]
+;       [set pES_indv (0.02 * ES - 0.02)* 0.01 * 6]
+;
+;       ]
+;       ]
+;
+;       [
+;        set pVCAM_indv (0.085 * VCAM - 0.085) * 0.01 * (1.7404 * WSS_int ^ 2 - 6.0128 * WSS_int + 95.619)
+;        set pICAM_indv (0.081 * ICAM - 0.081) * 0.01 * (1.7404 * WSS_int ^ 2 - 6.0128 * WSS_int + 95.619)
+;        set pES_indv (0.02 * ES - 0.02) * 0.01 * (82.247 * WSS_int ^ 2 - 103.84 * WSS_int + 38.329)
+;       ]
+;       ]
+;       [
+;         set pVCAM_indv 0
+;         set pICAM_indv 0
+;         set pES_indv 0
+;       ]
+
+     ifelse (ES > 1)                                                                                              ; Without E selectin, no adhesion even with high ICAM/ VCAM
+       [
+         if (VCAM > 1)
+         [
+        ifelse (0 < WSS_int and WSS_int <= 2)
+       [
+         set pVCAM_indv (-196.3 + 196.5 * (1 - exp( - 6.973 * VCAM ^ (0.122) ))) * 0.01 * (1.7404 * WSS_int ^ 2 - 6.0128 * WSS_int + 95.619)
+         ]
+       [
+         ifelse (WSS_int = 0)
+         [
+           set pVCAM_indv (-196.3 + 196.5 * (1 - exp( - 6.973 * VCAM ^ (0.122) )))
+         ]
+         [set pVCAM_indv (-196.3 + 196.5 * (1 - exp( - 6.973 * VCAM ^ (0.122) ))) * 0.01 * 90
+         ]
+       ]
+        ]
+         if (ICAM > 1)
+         [
+        ifelse (0 < WSS_int and WSS_int <= 2)
+       [
+         set pICAM_indv (-14.58 + 14.72 * (1 - exp( - 4.675 * ICAM ^ (0.516) ))) * 0.01 * (1.7404 * WSS_int ^ 2 - 6.0128 * WSS_int + 95.619)
+         set pICAM_indv_neutro (-0.179 + 0.690 * (1 - exp( - 0.303 * ICAM ^ (1.559) ))) * 0.01 * (1.7404 * WSS_int ^ 2 - 6.0128 * WSS_int + 95.619)
+         ]
+       [
+         ifelse(WSS_int = 0)
+         [
+           set pICAM_indv (-14.58 + 14.72 * (1 - exp( - 4.675 * ICAM ^ (0.516) )))
+           set pICAM_indv_neutro (-0.179 + 0.690 * (1 - exp( - 0.303 * ICAM ^ (1.559) )))
+         ]
+         [
+         set pICAM_indv (-14.58 + 14.72 * (1 - exp( - 4.675 * ICAM ^ (0.516) ))) * 0.01 * 90
+         set pICAM_indv_neutro (-0.179 + 0.690 * (1 - exp( - 0.303 * ICAM ^ (1.559) ))) * 0.01 * 90
+         ]
+       ]
+         ]
+        ifelse (0 < WSS_int and WSS_int <= 0.7)
+       [
+         set pES_indv (0.000977  + 0.188 * (1 - exp( - 0.0000003675 * ES ^ (6.163) ))) * 0.01 * (82.247 * WSS_int ^ 2 - 103.84 * WSS_int + 38.329)
+         set pES_indv_neutro (0.00278  + 0.217 * (1 - exp( - 0.00000007214 * ES ^ (7.289) ))) * 0.01 * (82.247 * WSS_int ^ 2 - 103.84 * WSS_int + 38.329)
+         ]
+       [
+         ifelse(WSS_int = 0)
+         [
+           set pES_indv (0.000977  + 0.188 * (1 - exp( - 0.0000003675 * ES ^ (6.163) )))
+           set pES_indv_neutro (0.00278  + 0.217 * (1 - exp( - 0.00000007214 * ES ^ (7.289) )))
+         ]
+         [set pES_indv (0.000977  + 0.188 * (1 - exp( - 0.0000003675 * ES ^ (6.163) ))) * 0.01 * 6
+         set pES_indv_neutro (0.00278  + 0.217 * (1 - exp( - 0.00000007214 * ES ^ (7.289) ))) * 0.01 * 6
+         ]
+       ]
+       ]
+       [
+         set pVCAM_indv 0
+         set pICAM_indv 0
+         set pES_indv 0
+         set pICAM_indv_neutro 0
+         set pES_indv_neutro 0
+       ]
+
+       set pVCAM pVCAM + pVCAM_indv
+       set pICAM pICAM + pICAM_indv
+       set pES pES + pES_indv
+       set pICAM_neutro pICAM_neutro + pICAM_indv_neutro
+       set pES_neutro pES_neutro + pES_indv_neutro
+;      show pVCAM
+;      show pICAM
+;      show pES
+   ]
+      set pVCAM pVCAM / count_ECs
+      set pICAM pICAM / count_ECs
+      set pES pES / count_ECs
+      set pICAM_neutro pICAM_neutro / count_ECs
+      set pES_neutro pES_neutro / count_ECs
+;    show tnf
+;    show pVCAM
+;    show pICAM_neutro
+;    show pES_neutro
+   ]
+
+
+; Compute total probability of neutrophil
+
+     set pAdhesion_neutro (pICAM_neutro * pES_neutro) * FudgeFactor                                                                        ; Neutrophil does not bind to ICAM
+    ;show (word " Total neutrophil adhesion probability:" pAdhesion_neutro)
+
+    if ( pAdhesion_neutro > 1) [ set pAdhesion_neutro 1 ]
+
+    let pMigration_neutro ( pStiff_neutro )
+
+    set pTEM_neutro ( pAdhesion_neutro * pMigration_neutro )
+    ;show (word "probability of transmigration of neutrophil:" pTEM_neutro)
+
+  let neutro pTEM_neutro * (count neutrophils-here)                                                            ; Previous model: probability was checked for each leukocyte. Now to save time probabiliy for all cells are calculated. e.g. if tem probability
+  ;show neutro
+  set neutro precision neutro 0
+  ifelse (neutro > 0)
+  [set neutro neutro]
+  [let a random-float 1
+    ;show a
+  if (a < (pTEM_neutro * (count neutrophils-here)))
+  [set neutro 1]
+  ]
+ ; show neutro
+  ;show (word "Neutrophil transmigration:" neutro)                                                             ; of monocyte is 0.3 then out of 100, 30 will tranmigrate. Hence 0.3 * 100
+
+; Compute total probability of monocyte
+
+;  ifelse (pICAM > pVCAM)
+;    [ set pAdhesion_mono (pICAM + pES)]
+;    [ set pAdhesion_mono (pVCAM + pES)]
+
+  set pAdhesion_mono  (( pVCAM + pICAM ) * pES ) * FudgeFactor
+ ;show (word " Total monocyte adhesion probability:" pAdhesion_mono)
+
+    if ( pAdhesion_mono > 1) [ set pAdhesion_mono 1 ]
+
+        let pMigration_mono ( pStiff_mono )
+
+        set pTEM_mono ( pAdhesion_mono * pMigration_mono )
+        ;show (word "probability of transmigration of monocyte:" pTEM_mono)
+        let mono pTEM_mono * (count monocytes-here)
+        ;show mono
+        set mono precision mono 0
+   ifelse (mono > 0)
+  [set mono mono]
+  [let a random-float 1
+    ;show a
+  if (a < (pTEM_mono * (count monocytes-here)))
+  [set mono 1]
+  ]
+  ;show mono
+  ; show (word "monocyte transmigration:" mono)
+
+; Compute total probability of lymphocyte
+
+;  ifelse (pICAM > pVCAM)
+;    [ set pAdhesion_lympho (pICAM + pES)]
+;    [ set pAdhesion_lympho (pVCAM + pES)]
+
+  set pAdhesion_lympho (( pVCAM + pICAM ) * pES ) * FudgeFactor
+  ;show (word " Total lymphocyte adhesion probability:" pAdhesion_lympho)
+
+    if ( pAdhesion_lympho > 1) [ set pAdhesion_lympho 1 ]
+
+        let pMigration_lympho ( pStiff_lympho )
+
+        set pTEM_lympho ( pAdhesion_lympho * pMigration_lympho )
+        ;show (word "probability of transmigration of lymphocyte:" pTEM_lympho)
+
+  let lympho pTEM_lympho * (count lymphocytes-here)
+  ;show lympho
+  set lympho precision lympho 0
+
+  ifelse (lympho > 0)
+  [set lympho lympho]
+  [let a random-float 1
+   ; show a
+  if (a < (pTEM_lympho * (count lymphocytes-here)))
+  [set lympho 1]
+  ]
+ ; show lympho
+  ;show (word "Lympho transmigration:" lympho)
+
+  set leuko neutro + mono + lympho
+  ;set leuko precision leuko 0
+  ;show (word "transmigration:" leuko)
+
+  ask n-of neutro neutrophils-here [set pTEM 1]
+  ask n-of mono monocytes-here [set pTEM 1]
+  ask n-of lympho lymphocytes-here [set pTEM 1]
+
+   if(IL-1 > 0 or TNF-alpha > 0)
+  [
+    if (leuko > 0)
+    [
+   ask one-of turtles-here with [pTEM = 1]
+  [
+    ;show xcor show ycor show zcor
+    make-plaque]
+    ]
+    ask turtles-here with [pTEM = 1][
+     move-to patch x_final y_final z_final
+    ;show xcor
+    set in_plaque?  true
+    ;ask patch-here [show (word " final position:"pxcor)]
+]
+      ]
+
+  set leukocyte_tm leukocyte_tm + leuko                                  ; Gives total number of leukocytes that transmigrated
+  ;show leukocyte_tm
+end
+
+to make-plaque
+
+  if(IL-1 > 0 or TNF-alpha > 0)
+  [;show (word " tnf conc before migration:" TNF-alpha)
+    set in_plaque? true]
+  set keep_moving? true
+  while [keep_moving? = true]
+    [
+     ; setting initial position of leukocytes
+      set xcor_next pxcor
+      set ycor_next pycor
+      set zcor_next pzcor
+      set cytokine_max cytokine
+      ;show (word "position of leukocyte:" xcor_next ycor_next zcor_next)
+      ;show (word "cytokine at leukocyte:" cytokine_max)
+
+      ask neighbors [
+        if ( volume < volume_thresh)
+        [ ;show (word "available neighbor")
+          ;show (word " volume of neighbor patch: " volume)                                                             ; checking neighbor condition (volume, cytokine)
+           if (cytokine > cytokine_max)
+           [
+   ;          show (word "cytokine of neighbor: " cytokine)
+            set xcor_next pxcor
+            set ycor_next pycor
+            set zcor_next pzcor
+            set cytokine_max cytokine
+            ]
+           ]
+        ]
+      setxyz xcor_next ycor_next zcor_next
+                                                                                                                       ; setting final position of leukocytes
+;      show (word "new position of leukocyte:" xcor_next ycor_next zcor_next)
+;      show (word "cytokine at new position:" cytokine_max)
+
+     ifelse ((count neighbors with [volume < volume_thresh and isartery? = true]) > 0)
+     [ ask max-one-of neighbors with [volume < volume_thresh] [cytokine]                                              ; checking if the leukocytes reside at maximum cytokine position
+      [
+        ;show (word "maximum value of neighbor cytokine: "cytokine)
+        if (cytokine <= cytokine_max )                                ; '=' takes care of 0 cytokine condition
+          [set keep_moving? false]
+          ]
+     ]
+     [set keep_moving? false]
+        ;show keep_moving?
+
+  if (keep_moving? = false)
+  [
+      set tnf_tmp tnf_gen
+      set il1_tmp il1_gen
+      set il10_tmp il10_gen
+    if (any? ECs-here) and (cytokine_max != 0)
+    [
+       ;show (word "z-axis:" pzcor)
+      let z_axis pzcor
+      set plaqueCount count patches with [inPlaque? = true and pzcor = z_axis]
+      ;show (word " plaque count at z:" pzcor plaqueCount)
+      ifelse (plaqueCount > plaque_lumen_ratio * LumenArea)
+      [ set plaque_too_big? true
+        set growing_inside? true]
+      [ set plaque_too_big? false]
+     ; show (word " big plaque?" plaque_too_big?)
+      ifelse (plaque_too_big? = false)
+      [
+        move-to max-one-of patches with [(inPlaque? = true and volume < volume_thresh) or ((count neighbors with [inPlaque? = true]) > 0 and volume < volume_thresh)][cytokine]
+       ask patch-here [
+       set x_final pxcor
+       set y_final pycor
+       set z_final pzcor
+   ;    show (word " final position:" x_final y_final z_final)
+       set volume volume + v_cell * leuko
+       set inPlaque? true
+   ;    show (word "jump position:" pxcor pycor pzcor)
+      ]
+    ]
+      [
+        ifelse ( random-float 1 < prob_atherosclerosis )
+        [
+       ask patch-here[
+       set x_final pxcor
+       set y_final pycor
+       set z_final pzcor
+;       show (word " final position:" x_final y_final z_final)
+          set volume volume + v_cell * leuko
+          set inPlaque? true
+        ]
+        ]
+        [
+          ;move-to max-one-of patches with [(inPlaque? = true or (count neighbors with [inPlaque? = true]) > 0 ) and (count FBs-here) > 0 and volume < volume_thresh ][cytokine]
+          move-to max-one-of patches with [(inPlaque? = true and volume < volume_thresh) or ((count neighbors with [inPlaque? = true]) > 0 and volume < volume_thresh)][cytokine]
+        ]
+      ]
+    ]
+    ;   show (word "patch coordinate:" pxcor pycor pzcor)
+       ask min-one-of patches with [islumen? = false and isartery? = false and ( abs (pzcor) <= artery_length / 2 ) ] [distance myself]
+            [
+              ;show (word " close patch:" pxcor pycor pzcor)
+              set xcor_jump pxcor
+              set ycor_jump pycor
+              set zcor_jump pzcor]
+    if ( any? ACs-here)
+    [
+      ask ACs-here [
+ ;        show (word" position of AC:" xcor ycor zcor)
+         set xcor xcor_jump
+         set ycor ycor_jump
+         set zcor zcor_jump
+ ;        show (word " jump position:" xcor ycor zcor )
+         ask patch-here [set isartery? true]
+
+     ]
+    ]
+  if (cytokine_max != 0)
+    [
+       ask patch-here [
+       set x_final pxcor
+       set y_final pycor
+       set z_final pzcor
+       ;show (word " final position:" x_final y_final z_final)
+       set volume volume + v_cell * leuko
+       set inPlaque? true
+      ]
+     ]
+;    show (word "patch coordinate:" pxcor pycor pzcor)
+       ask min-one-of patches with [islumen? = false and isartery? = false and ( abs (pzcor) <= artery_length / 2 ) ] [distance myself]
+            [
+              ;show (word " close patch:" pxcor pycor pzcor)
+              set xcor_jump pxcor
+              set ycor_jump pycor
+              set zcor_jump pzcor]
+    if ( any? ACs-here)
+    [
+      ask ACs-here [
+       ;  show (word" position of AC:" xcor ycor zcor)
+         set xcor xcor_jump
+         set ycor ycor_jump
+         set zcor zcor_jump
+     ;    show (word " jump position:" xcor ycor zcor )
+         ask patch-here [set isartery? true]
+
+     ]
+    ]
+    ]
+  ]
+
+end
+
+to get_lumen_area
+  set LumenAreaNow ( count patches with [pzcor = 0 and islumen? = true])                                                    ; Computation of lumen area
+end
+
+
+to get_lumen_volume
+  set LumenVolumeNow (count patches with [islumen? = true])
+end
+
+
+to Cholesterol_infiltration
+
+ask ECs with [(count neighbors with [islumen? = true and ldl > 0]) > 0]
+[
+  ask patch-here[
+  set ldl_total 0
+  set hdl_total 0
+  set tgrl_total 0
+  set count_neigh count neighbors with [islumen? = true]
+  let WSS WSS_int
+  ask neighbors with [islumen? = true]
+  [
+    ifelse (WSS < 5)
+    [
+    ;let ldl_funct (2e-08 * WSS ^ 6 - 2E-06 * WSS ^ 5 + 6E-05 * WSS ^ 4 - 0.0011 * WSS ^ 3 + 0.0104 * WSS ^ 2 - 0.0509 * WSS + 1.145)
+    let ldl_funct (0.0048 * WSS ^ 2 - 0.0419 * WSS + 1.1423)
+    let tgrl_funct (0.0048 * WSS ^ 2 - 0.0419 * WSS + 1.1423)
+
+    set ldl_total (ldl * ldl_funct) + ldl_total
+    set ldl ldl - (ldl * ldl_funct)
+    set tgrl_total (tgrl * tgrl_funct) + tgrl_total
+    set tgrl tgrl - (tgrl * tgrl_funct)                                                                                                       ; Not found so considered same as ldl
+     ]
+    [
+    let ldl_funct 1.04
+    let tgrl_funct 1.04
+
+    set ldl_total (ldl * ldl_funct) + ldl_total
+    set ldl ldl - (ldl * ldl_funct)
+    set tgrl_total (tgrl * tgrl_funct) + tgrl_total
+    set tgrl tgrl - (tgrl * tgrl_funct)
+    ]
+
+    ifelse (WSS < 2)
+    [
+    ;let hdl_funct ( - 0.0122 * WSS ^ 3 + 0.1311 * WSS ^ 2 - 0.4203 * WSS + 1.4095)
+    let hdl_funct (0.1586 * WSS ^ 2 - 0.5223 * WSS + 1.4403)
+
+    set hdl_total (hdl * hdl_funct) + hdl_total
+    set hdl hdl - (hdl * hdl_funct)
+    ]
+    [
+    let hdl_funct 1
+
+    set hdl_total (hdl * hdl_funct) + hdl_total
+    set hdl hdl - (hdl * hdl_funct)
+    ]
+
+  ]
+
+  set ldl ldl_total / count_neigh
+  set hdl hdl_total / count_neigh
+  set tgrl tgrl_total / count_neigh
+  ;show (word "ldl on EC: "ldl_total)
+  ]
+]
+
+
+end
+
+
+
+to dataout_WSSZone
+  print "saving data for WSS evaluation"
+  let file ( word "ABMData\\WSSZone_@" ticks ".txt" )
+  if is-string? file [
+    if file-exists? file [
+      file-delete file ]
+
+    file-open file
+ ;   file-print (ticks)
+                                                                                                       ; "  " double space between inverted comma gives zero value, so only one spac
+ask patches with [islumen? = true and ((count neutrophils-here) > 0 or (count monocytes-here) > 0 or (count lymphocytes-here) > 0)]
+  [
+    file-print (word ( pxcor * Unitfactor ) " " ( pycor * Unitfactor ) " " ( pzcor * Unitfactor ))
+  ]
+  file-close]
+
+end
+
+;
+; to dataout_leukocytes
+;
+;  print "saving data of leukocytes"
+;  let file ( word "ABMData\\leukocytes_data_@" ticks ".txt" )
+;  if is-string? file [
+;    if file-exists? file [
+;      file-delete file ]
+;
+;    file-open file
+; ;   file-print (ticks)
+;
+; foreach sort neutrophils with [in_plaque? = false] [
+;      ask ? [
+;        file-print(word ( xcor * Unitfactor ) " " ( ycor * Unitfactor ) " " ( zcor * Unitfactor ) )
+;      ]]
+; foreach sort monocytes with [in_plaque? = false] [
+;      ask ? [
+;        file-print(word ( xcor * Unitfactor ) " " ( ycor * Unitfactor ) " " ( zcor * Unitfactor ) )
+;      ]]
+; foreach sort lymphocytes with [in_plaque? = false] [
+;      ask ? [
+;        file-print(word ( xcor * Unitfactor ) " " ( ycor * Unitfactor ) " " ( zcor * Unitfactor ) )
+;      ]]
+;                                                                                                        ; "  " double space between inverted comma gives zero value, so only one space
+;  file-close]
+;
+;end
+
+to dataout_intima
+  print "saving data for intima"
+  let file ( word "ABMData\\intima_data_@" ticks ".txt" )
+  if is-string? file [
+    if file-exists? file [
+      file-delete file ]
+
+    file-open file
+    file-print (ticks)
+    foreach sort ECs [ ?1 ->
+      ask ?1 [
+        file-print(word xcor ", " ycor ", " zcor)
+      ] ]
+    file-close]
+  ;  print "   complete"
+end
+
+to dataout_plaque
+  print "saving data for plaque"
+  let file ( word "ABMData\\plaque_data_@" ticks ".txt" )
+  if is-string? file [
+    if file-exists? file [
+      file-delete file ]
+
+    file-open file
+    file-print (ticks)
+    foreach sort patches with [inPlaque? = true] [ ?1 ->
+      ask ?1 [
+        file-print(word pxcor ", " pycor ", " pzcor)
+      ] ]
+    file-close]
+  ;  print "   complete"
+end
+
+to dataout_AC
+  print "saving data for AC"
+  let file ( word "ABMData\\ac_data_@" ticks ".txt" )
+  if is-string? file [
+    if file-exists? file [
+      file-delete file ]
+
+    file-open file
+    file-print (ticks)
+    foreach sort ACs [ ?1 ->
+      ask ?1 [
+        file-print(word xcor ", " ycor ", " zcor)
+      ] ]
+    file-close]
+  ;  print "   complete"
+end
+
+
+to life-over
+  if (in_plaque? = true)
+  [if (T_count > T)
+    [
+      ;show (word "life is over")
+      die
+      ]
+  ]
+end
+
+to produce-macrophage
+
+  set c count monocytes with [in_plaque? = true]
+;    show (word" number of monocytes in plaque:" c)
+
+  ifelse (c < 3)
+  [
+    let macro random-float 1
+    ;show macro
+    if (macro < (2 * c / 3))
+    [
+      ask monocytes with [in_plaque? = true]                                                                                         ; macrophage production if monocytes is less than 3
+      [
+       ;show T_count
+        if (T_count > T)
+      [
+        ask patch-here [
+          sprout-macro1s 1 [set color blue                                                                                           ; Macrophage production
+            set shape "circle"
+            set T_count 0
+            set T Tm1
+            set consume consume_ox-ldl
+            set consume_ox-ldl_count 0
+          ]
+          set inPlaque? true
+          ]
+  ;show (word " M1 generation complete")
+  die
+  ]
+   ]
+  ]
+  ]
+
+ [
+  ask n-of ( 2 * c / 3 ) monocytes with [in_plaque? = true]
+   [
+      ;show count monocytes with [in_plaque? = true and T_count > T]
+      if (T_count > T)
+      [
+        ask patch-here [
+          sprout-macro1s 1 [set color blue                                                                                           ; Macrophage production
+            set shape "circle"
+            set T_count 0
+            set T Tm1
+            set consume consume_ox-ldl
+            set consume_ox-ldl_count 0
+          ]
+          set inPlaque? true
+          ]
+  ;show (word " M1 generation complete")
+  die
+  ]
+   ]
+ask monocytes with [in_plaque? = true]
+[ if (T_count > T)
+  [
+  ask patch-here [
+    sprout-macro2s 1 [set color yellow
+      set shape "circle"
+      set T_count 0
+      set T Tm2]
+    set inPlaque? true
+  ]
+  die
+]
+]
+  ]
+
+end
+
+to update_ldl
+
+ set Cm1 count macro1s-here
+ ;show (word "ldl before removal:" ldl)
+ ;show (word "ox-ldl before removal:" ox-ldl)
+ if (ox-ldl <= 0)
+ [set ox-ldl 1e-10]                                                   ; to avoid getting non number
+ if (ldl <= 0)
+ [set ldl 1e-10]
+
+ let ox-ldl_m1 (Cm1 *( 0.042 * 10 ^ (-6) * 10 ^ (6) * (525.7812 - 525.803 * ( 1 - exp(- 5.9591 * ox-ldl ^ (-0.15484) ) ))))       ; ug/ patch = 10^6 ng/ul
+ if (ox-ldl_m1 < 0)
+ [set ox-ldl_m1 0]
+ set ox-ldl ox-ldl - ox-ldl_m1                                                                                                     ; ldl [ug/ml] = [ng/ul]
+
+ let ldl_m1 (Cm1 *( 0.042 * 10 ^ (-6) * 10 ^ (6) * (-0.0043499 + 3.961  * ( 1 - exp(-0.02853  * ldl ^ (0.99859) ) ))))
+ if (ldl_m1 < 0)
+ [set ldl_m1 0]
+ set ldl ldl - ldl_m1
+
+ if (ldl < 0)
+ [set ldl 0]
+ if (ox-ldl < 0)
+ [set ox-ldl 0]
+ ;show (word "ldl after removal:" ldl)
+ ;show (word "ox-ldl after removal:" ox-ldl)
+
+end
+
+
+
+
+to get_plaque_area
+  set plaqueAreaNow ( count patches with [ (pzcor = 0) and (inPlaque? = true) ] )                                                          ; Computing plaque area
+;  show (word" plaque area :" plaqueAreaNow)
+end
+
+to update_cellVolume
+
+    set Cn count neutrophils-here
+    set Cl count lymphocytes-here
+    set Cm count monocytes-here
+    set Cm1 count macro1s-here
+    let Cm2 count macro2s-here
+    let Cf count FCs-here
+;    show (word "volume before:" volume)
+    set volume  (( Cn * Vn ) + (Cl * Vl) + (Cm * Vm) + (Cm1 * Vm1) + (Cm2 * Vm2) + (Cf * Vf))
+ ;   show (word "updated volume:" volume)
+
+end
+
+to update_cytokine
+
+  set tnf tnf + (( Cn * tnf_perneut ) + (Cl * tnf_perlympho) + (Cm * tnf_permono) + (Cm1 * tnf_perm1))
+  set il1 il1 + (( Cn * il1_perneut ) + (Cl * il1_perlympho) + (Cm * il1_permono) + (Cm1 * il1_perm1))
+  set il10 il10 + (( Cn * il10_perneut ) + (Cl * il10_perlympho) + (Cm * il10_permono) + (Cm1 * il10_perm1))
+  ;show tnf
+; Removal of cytokine by il10                                                                    ;Fiorention
+
+ ifelse (il10 > 6.67)
+ [
+ set il1 (-0.1454 * 6.67  + 1) * il1
+ set tnf (-0.144 * 6.67  + 1) * tnf                                                         ; 1ng = 15 U IL-10; 100U = 6.67 ng
+ ]
+  [
+ set il1 (-0.1454 * il10  + 1) * il1
+ set tnf (-0.144 * il10  + 1) * tnf
+  ]
+ ;show (word "tnf concentration after il10 removal:" tnf)
+ set cytokine tnf + il1
+
+end
+
+
+to dataout_neutro
+  let file ( word "ABMData\\neutro_data_@" ticks ".txt" )
+  if is-string? file [
+    if file-exists? file [
+      file-delete file ]
+
+    file-open file
+    file-print (ticks)
+    foreach sort neutrophils with [in_plaque? = true] [ ?1 ->
+      ask ?1 [
+        file-print(word xcor ", " ycor ", " zcor)
+      ] ]
+    file-close]
+  ;  print "   complete"
+end
+
+
+ ;; In case of increasing artery length, part of the process
+  to increase_length
+    ask patches with [(count ECs-on neighbors) > 0 and islumen? = true]
+  [
+;      show pxcor
+    ask min-one-of patches with [inPlaque? = true][distance myself]
+      [
+        ;show distance myself
+        set dist_min_plaque distance myself]                                                           ; Find distance of the nearest plaque cell
+      if ( dist_min_plaque < 2 * threshold_vicinity )                                                 ; Checking if the plaque is close enough
+      [
+      create-leukocyte-in-lumen
+      ;show pxcor
+        set resides_leuko? true]
+  ]
+end
+@#$#@#$#@
+GRAPHICS-WINDOW
+0
+0
+1323
+1344
+-1
+-1
+13.0
+1
+10
+1
+1
+1
+0
+1
+1
+1
+-50
+50
+-50
+50
+-50
+50
+1
+0
+1
+ticks
+30.0
+
+SLIDER
+42
+72
+214
+105
+artery_length
+artery_length
+0
+200
+40.0
+1
+1
+Unit
+HORIZONTAL
+
+SLIDER
+41
+108
+213
+141
+num-layers-AC
+num-layers-AC
+0
+10
+5.0
+1
+1
+NIL
+HORIZONTAL
+
+BUTTON
+274
+124
+337
+157
+NIL
+setup
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+247
+173
+359
+206
+NIL
+plaque-growth
+T
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+SLIDER
+42
+162
+214
+195
+Stiffness
+Stiffness
+0
+20
+3.0
+1
+1
+kPa
+HORIZONTAL
+
+SLIDER
+41
+225
+213
+258
+LDL_conc
+LDL_conc
+0
+2000
+956.0
+1
+1
+ng/ul
+HORIZONTAL
+
+TEXTBOX
+234
+79
+384
+97
+1 Unit = 100 um
+11
+0.0
+1
+
+PLOT
+723
+324
+923
+474
+Total LDL/ ox-LDL
+Ticks
+LDL/ ox-LDL (ng/ul)
+0.0
+1000.0
+0.0
+1.0
+true
+false
+"" ""
+PENS
+"ldl" 1.0 0 -16777216 true "" "plot sum [ldl ] of patches"
+"ox-ldl" 1.0 0 -7500403 true "" "plot sum [ox-ldl] of patches"
+
+PLOT
+371
+326
+709
+522
+Total Cells in The Wall
+Ticks
+Number of Cells in Wall
+0.0
+1000.0
+0.0
+1000.0
+true
+true
+"" ""
+PENS
+"Neutrophils" 1.0 0 -11221820 true "" "plot count neutrophils with [in_plaque? = true]"
+"Monocytes_1" 1.0 0 -13345367 true "" "plot count monocytes with [in_plaque? = true]"
+"Lymphocytes_1" 1.0 0 -5825686 true "" "plot count lymphocytes with [in_plaque? = true]"
+"Macrophage-1" 1.0 0 -13791810 true "" "plot count macro1s"
+"Macrophage-2" 1.0 0 -1184463 true "" "plot count macro2s"
+"Foam Cells" 1.0 0 -2674135 true "" "plot count FCs"
+
+PLOT
+646
+162
+846
+312
+Plaque size
+Ticks
+Plaque Count
+0.0
+1000.0
+0.0
+5000.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot count patches with [inPlaque? = true]"
+
+PLOT
+848
+161
+1048
+311
+Lumen Area
+Ticks
+Lumen Area
+0.0
+200.0
+0.0
+1000.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot LumenAreaNow"
+
+PLOT
+647
+13
+846
+160
+Lumen Volume
+Ticks
+ Luminal Patches
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot count patches with [islumen? = true]"
+
+SLIDER
+41
+259
+213
+292
+HDL_conc
+HDL_conc
+0
+1000
+500.0
+1
+1
+ng/ul
+HORIZONTAL
+
+SLIDER
+21
+293
+211
+326
+TGRL_conc
+TGRL_conc
+0
+15000
+1500.0
+1
+1
+ng/ul
+HORIZONTAL
+
+PLOT
+1053
+12
+1318
+196
+Total Cell Adhesion Molecule
+Ticks
+AM (Times of Baseline)
+0.0
+10.0
+0.0
+10.0
+true
+true
+"" ""
+PENS
+"ICAM-1" 1.0 0 -8053223 true "" "plot sum [ICAM] of patches"
+"VCAM-1" 1.0 0 -7171555 true "" "plot sum [VCAM] of patches"
+"E-Selectin" 1.0 0 -2674135 true "" "plot sum [ES] of patches"
+
+PLOT
+848
+13
+1048
+163
+Plaque Area
+Ticks
+Plaque Area
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot count patches with [inPlaque? = true and pzcor = 0]"
+
+PLOT
+420
+166
+641
+317
+Cytokine at middle EC
+Ticks
+Cytokine (U/ml)
+0.0
+10.0
+0.0
+1.0
+true
+true
+"" ""
+PENS
+"TNF-alpha" 1.0 0 -2139308 true "" "plot [tnf] of patch -18 0 0"
+"IL-1 beta" 1.0 0 -955883 true "" "plot [il1] of patch -18 0 0"
+"il-10" 1.0 0 -2674135 true "" "plot [il10] of patch -18 0 0"
+
+PLOT
+1052
+197
+1320
+363
+AM at middle EC
+Ticks
+AM (Times of Baseline)
+0.0
+10.0
+0.0
+10.0
+true
+true
+"" ""
+PENS
+"ICAM-1" 1.0 0 -7858858 true "" "plot [ICAM] of patch -18 0 0"
+"VCAM-1" 1.0 0 -10263788 true "" "plot [VCAM] of patch -18 0 0"
+"E-Selectin" 1.0 0 -2674135 true "" "plot [ES] of patch -18 0 0"
+
+TEXTBOX
+79
+334
+229
+352
+1 mg/dl = 10 ng/ul
+11
+0.0
+1
+
+PLOT
+436
+10
+636
+160
+Total Cytokine
+NIL
+NIL
+0.0
+10.0
+0.0
+1.0
+true
+true
+"" ""
+PENS
+"tnf" 1.0 0 -2139308 true "" "plot sum [tnf] of patches"
+"il1" 1.0 0 -817084 true "" "plot sum [il1] of patches"
+"il-10" 1.0 0 -2674135 true "" "plot sum [il10] of patches"
+
+PLOT
+727
+479
+927
+629
+Total Transmigration Ratio
+NIL
+NIL
+0.0
+10.0
+0.0
+0.5
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot tm_ratio"
+
+PLOT
+973
+395
+1214
+539
+Adhesion Probability
+NIL
+NIL
+0.0
+10.0
+0.0
+0.01
+true
+true
+"" ""
+PENS
+"neutrophil" 1.0 0 -16777216 true "" "plot [pAdhesion_neutro] of patch -18 0 0"
+"monocytes" 1.0 0 -7500403 true "" "plot [pAdhesion_mono] of patch -18 0 0"
+"lymphocytes" 1.0 0 -2674135 true "" "plot [pAdhesion_lympho] of patch -18 0 0"
+
+@#$#@#$#@
+## WHAT IS IT?
+
+(a general understanding of what the model is trying to show or explain)
+
+## HOW IT WORKS
+
+(what rules the agents use to create the overall behavior of the model)
+
+## HOW TO USE IT
+
+(how to use the model, including a description of each of the items in the Interface tab)
+
+## THINGS TO NOTICE
+
+(suggested things for the user to notice while running the model)
+
+## THINGS TO TRY
+
+(suggested things for the user to try to do (move sliders, switches, etc.) with the model)
+
+## EXTENDING THE MODEL
+
+(suggested things to add or change in the Code tab to make the model more complicated, detailed, accurate, etc.)
+
+## NETLOGO FEATURES
+
+(interesting or unusual features of NetLogo that the model uses, particularly in the Code tab; or where workarounds were needed for missing features)
+
+## RELATED MODELS
+
+(models in the NetLogo Models Library and elsewhere which are of related interest)
+
+## CREDITS AND REFERENCES
+
+(a reference to the model's URL on the web if it has one, as well as any other necessary credits, citations, and links)
+@#$#@#$#@
+default
+true
+0
+Polygon -7500403 true true 150 5 40 250 150 205 260 250
+
+airplane
+true
+0
+Polygon -7500403 true true 150 0 135 15 120 60 120 105 15 165 15 195 120 180 135 240 105 270 120 285 150 270 180 285 210 270 165 240 180 180 285 195 285 165 180 105 180 60 165 15
+
+arrow
+true
+0
+Polygon -7500403 true true 150 0 0 150 105 150 105 293 195 293 195 150 300 150
+
+box
+false
+0
+Polygon -7500403 true true 150 285 285 225 285 75 150 135
+Polygon -7500403 true true 150 135 15 75 150 15 285 75
+Polygon -7500403 true true 15 75 15 225 150 285 150 135
+Line -16777216 false 150 285 150 135
+Line -16777216 false 150 135 15 75
+Line -16777216 false 150 135 285 75
+
+bug
+true
+0
+Circle -7500403 true true 96 182 108
+Circle -7500403 true true 110 127 80
+Circle -7500403 true true 110 75 80
+Line -7500403 true 150 100 80 30
+Line -7500403 true 150 100 220 30
+
+butterfly
+true
+0
+Polygon -7500403 true true 150 165 209 199 225 225 225 255 195 270 165 255 150 240
+Polygon -7500403 true true 150 165 89 198 75 225 75 255 105 270 135 255 150 240
+Polygon -7500403 true true 139 148 100 105 55 90 25 90 10 105 10 135 25 180 40 195 85 194 139 163
+Polygon -7500403 true true 162 150 200 105 245 90 275 90 290 105 290 135 275 180 260 195 215 195 162 165
+Polygon -16777216 true false 150 255 135 225 120 150 135 120 150 105 165 120 180 150 165 225
+Circle -16777216 true false 135 90 30
+Line -16777216 false 150 105 195 60
+Line -16777216 false 150 105 105 60
+
+car
+false
+0
+Polygon -7500403 true true 300 180 279 164 261 144 240 135 226 132 213 106 203 84 185 63 159 50 135 50 75 60 0 150 0 165 0 225 300 225 300 180
+Circle -16777216 true false 180 180 90
+Circle -16777216 true false 30 180 90
+Polygon -16777216 true false 162 80 132 78 134 135 209 135 194 105 189 96 180 89
+Circle -7500403 true true 47 195 58
+Circle -7500403 true true 195 195 58
+
+circle
+false
+0
+Circle -7500403 true true 0 0 300
+
+circle 2
+false
+0
+Circle -7500403 true true 0 0 300
+Circle -16777216 true false 30 30 240
+
+cloud
+false
+0
+Circle -7500403 true true 118 193 94
+Circle -7500403 true true 101 87 127
+Circle -7500403 true true 51 141 108
+Circle -7500403 true true 43 87 95
+Circle -7500403 true true 68 8 134
+
+cow
+false
+0
+Polygon -7500403 true true 200 193 197 249 179 249 177 196 166 187 140 189 93 191 78 179 72 211 49 209 48 181 37 149 25 120 25 89 45 72 103 84 179 75 198 76 252 64 272 81 293 103 285 121 255 121 242 118 224 167
+Polygon -7500403 true true 73 210 86 251 62 249 48 208
+Polygon -7500403 true true 25 114 16 195 9 204 23 213 25 200 39 123
+
+cylinder
+false
+0
+Circle -7500403 true true 0 0 300
+
+dot
+false
+0
+Circle -7500403 true true 90 90 120
+
+face happy
+false
+0
+Circle -7500403 true true 8 8 285
+Circle -16777216 true false 60 75 60
+Circle -16777216 true false 180 75 60
+Polygon -16777216 true false 150 255 90 239 62 213 47 191 67 179 90 203 109 218 150 225 192 218 210 203 227 181 251 194 236 217 212 240
+
+face neutral
+false
+0
+Circle -7500403 true true 8 7 285
+Circle -16777216 true false 60 75 60
+Circle -16777216 true false 180 75 60
+Rectangle -16777216 true false 60 195 240 225
+
+face sad
+false
+0
+Circle -7500403 true true 8 8 285
+Circle -16777216 true false 60 75 60
+Circle -16777216 true false 180 75 60
+Polygon -16777216 true false 150 168 90 184 62 210 47 232 67 244 90 220 109 205 150 198 192 205 210 220 227 242 251 229 236 206 212 183
+
+fish
+false
+0
+Polygon -1 true false 44 131 21 87 15 86 0 120 15 150 0 180 13 214 20 212 45 166
+Polygon -1 true false 135 195 119 235 95 218 76 210 46 204 60 165
+Polygon -1 true false 75 45 83 77 71 103 86 114 166 78 135 60
+Polygon -7500403 true true 30 136 151 77 226 81 280 119 292 146 292 160 287 170 270 195 195 210 151 212 30 166
+Circle -16777216 true false 215 106 30
+
+flag
+false
+0
+Rectangle -7500403 true true 60 15 75 300
+Polygon -7500403 true true 90 150 270 90 90 30
+Line -7500403 true 75 135 90 135
+Line -7500403 true 75 45 90 45
+
+flower
+false
+0
+Polygon -10899396 true false 135 120 165 165 180 210 180 240 150 300 165 300 195 240 195 195 165 135
+Circle -7500403 true true 85 132 38
+Circle -7500403 true true 130 147 38
+Circle -7500403 true true 192 85 38
+Circle -7500403 true true 85 40 38
+Circle -7500403 true true 177 40 38
+Circle -7500403 true true 177 132 38
+Circle -7500403 true true 70 85 38
+Circle -7500403 true true 130 25 38
+Circle -7500403 true true 96 51 108
+Circle -16777216 true false 113 68 74
+Polygon -10899396 true false 189 233 219 188 249 173 279 188 234 218
+Polygon -10899396 true false 180 255 150 210 105 210 75 240 135 240
+
+house
+false
+0
+Rectangle -7500403 true true 45 120 255 285
+Rectangle -16777216 true false 120 210 180 285
+Polygon -7500403 true true 15 120 150 15 285 120
+Line -16777216 false 30 120 270 120
+
+leaf
+false
+0
+Polygon -7500403 true true 150 210 135 195 120 210 60 210 30 195 60 180 60 165 15 135 30 120 15 105 40 104 45 90 60 90 90 105 105 120 120 120 105 60 120 60 135 30 150 15 165 30 180 60 195 60 180 120 195 120 210 105 240 90 255 90 263 104 285 105 270 120 285 135 240 165 240 180 270 195 240 210 180 210 165 195
+Polygon -7500403 true true 135 195 135 240 120 255 105 255 105 285 135 285 165 240 165 195
+
+line
+true
+0
+Line -7500403 true 150 0 150 300
+
+line half
+true
+0
+Line -7500403 true 150 0 150 150
+
+pentagon
+false
+0
+Polygon -7500403 true true 150 15 15 120 60 285 240 285 285 120
+
+person
+false
+0
+Circle -7500403 true true 110 5 80
+Polygon -7500403 true true 105 90 120 195 90 285 105 300 135 300 150 225 165 300 195 300 210 285 180 195 195 90
+Rectangle -7500403 true true 127 79 172 94
+Polygon -7500403 true true 195 90 240 150 225 180 165 105
+Polygon -7500403 true true 105 90 60 150 75 180 135 105
+
+plant
+false
+0
+Rectangle -7500403 true true 135 90 165 300
+Polygon -7500403 true true 135 255 90 210 45 195 75 255 135 285
+Polygon -7500403 true true 165 255 210 210 255 195 225 255 165 285
+Polygon -7500403 true true 135 180 90 135 45 120 75 180 135 210
+Polygon -7500403 true true 165 180 165 210 225 180 255 120 210 135
+Polygon -7500403 true true 135 105 90 60 45 45 75 105 135 135
+Polygon -7500403 true true 165 105 165 135 225 105 255 45 210 60
+Polygon -7500403 true true 135 90 120 45 150 15 180 45 165 90
+
+sheep
+false
+15
+Circle -1 true true 203 65 88
+Circle -1 true true 70 65 162
+Circle -1 true true 150 105 120
+Polygon -7500403 true false 218 120 240 165 255 165 278 120
+Circle -7500403 true false 214 72 67
+Rectangle -1 true true 164 223 179 298
+Polygon -1 true true 45 285 30 285 30 240 15 195 45 210
+Circle -1 true true 3 83 150
+Rectangle -1 true true 65 221 80 296
+Polygon -1 true true 195 285 210 285 210 240 240 210 195 210
+Polygon -7500403 true false 276 85 285 105 302 99 294 83
+Polygon -7500403 true false 219 85 210 105 193 99 201 83
+
+square
+false
+0
+Rectangle -7500403 true true 30 30 270 270
+
+square 2
+false
+0
+Rectangle -7500403 true true 30 30 270 270
+Rectangle -16777216 true false 60 60 240 240
+
+star
+false
+0
+Polygon -7500403 true true 151 1 185 108 298 108 207 175 242 282 151 216 59 282 94 175 3 108 116 108
+
+target
+false
+0
+Circle -7500403 true true 0 0 300
+Circle -16777216 true false 30 30 240
+Circle -7500403 true true 60 60 180
+Circle -16777216 true false 90 90 120
+Circle -7500403 true true 120 120 60
+
+tree
+false
+0
+Circle -7500403 true true 118 3 94
+Rectangle -6459832 true false 120 195 180 300
+Circle -7500403 true true 65 21 108
+Circle -7500403 true true 116 41 127
+Circle -7500403 true true 45 90 120
+Circle -7500403 true true 104 74 152
+
+triangle
+false
+0
+Polygon -7500403 true true 150 30 15 255 285 255
+
+triangle 2
+false
+0
+Polygon -7500403 true true 150 30 15 255 285 255
+Polygon -16777216 true false 151 99 225 223 75 224
+
+truck
+false
+0
+Rectangle -7500403 true true 4 45 195 187
+Polygon -7500403 true true 296 193 296 150 259 134 244 104 208 104 207 194
+Rectangle -1 true false 195 60 195 105
+Polygon -16777216 true false 238 112 252 141 219 141 218 112
+Circle -16777216 true false 234 174 42
+Rectangle -7500403 true true 181 185 214 194
+Circle -16777216 true false 144 174 42
+Circle -16777216 true false 24 174 42
+Circle -7500403 false true 24 174 42
+Circle -7500403 false true 144 174 42
+Circle -7500403 false true 234 174 42
+
+turtle
+true
+0
+Polygon -10899396 true false 215 204 240 233 246 254 228 266 215 252 193 210
+Polygon -10899396 true false 195 90 225 75 245 75 260 89 269 108 261 124 240 105 225 105 210 105
+Polygon -10899396 true false 105 90 75 75 55 75 40 89 31 108 39 124 60 105 75 105 90 105
+Polygon -10899396 true false 132 85 134 64 107 51 108 17 150 2 192 18 192 52 169 65 172 87
+Polygon -10899396 true false 85 204 60 233 54 254 72 266 85 252 107 210
+Polygon -7500403 true true 119 75 179 75 209 101 224 135 220 225 175 261 128 261 81 224 74 135 88 99
+
+wheel
+false
+0
+Circle -7500403 true true 3 3 294
+Circle -16777216 true false 30 30 240
+Line -7500403 true 150 285 150 15
+Line -7500403 true 15 150 285 150
+Circle -7500403 true true 120 120 60
+Line -7500403 true 216 40 79 269
+Line -7500403 true 40 84 269 221
+Line -7500403 true 40 216 269 79
+Line -7500403 true 84 40 221 269
+
+wolf
+false
+0
+Polygon -16777216 true false 253 133 245 131 245 133
+Polygon -7500403 true true 2 194 13 197 30 191 38 193 38 205 20 226 20 257 27 265 38 266 40 260 31 253 31 230 60 206 68 198 75 209 66 228 65 243 82 261 84 268 100 267 103 261 77 239 79 231 100 207 98 196 119 201 143 202 160 195 166 210 172 213 173 238 167 251 160 248 154 265 169 264 178 247 186 240 198 260 200 271 217 271 219 262 207 258 195 230 192 198 210 184 227 164 242 144 259 145 284 151 277 141 293 140 299 134 297 127 273 119 270 105
+Polygon -7500403 true true -1 195 14 180 36 166 40 153 53 140 82 131 134 133 159 126 188 115 227 108 236 102 238 98 268 86 269 92 281 87 269 103 269 113
+
+x
+false
+0
+Polygon -7500403 true true 270 75 225 30 30 225 75 270
+Polygon -7500403 true true 30 75 75 30 270 225 225 270
+@#$#@#$#@
+NetLogo 3D 6.0.4
+@#$#@#$#@
+@#$#@#$#@
+@#$#@#$#@
+@#$#@#$#@
+@#$#@#$#@
+default
+0.0
+-0.2 0 0.0 1.0
+0.0 1 1.0 0.0
+0.2 0 0.0 1.0
+link direction
+true
+0
+Line -7500403 true 150 150 90 180
+Line -7500403 true 150 150 210 180
+@#$#@#$#@
+0
+@#$#@#$#@
